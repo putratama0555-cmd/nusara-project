@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 export type AuthUser = {
   name: string;
@@ -24,65 +32,79 @@ export const DEMO_ACCOUNT: StoredAccount = {
   password: "demo123",
 };
 
-function readAccounts(): StoredAccount[] {
-  if (typeof window === "undefined") return [DEMO_ACCOUNT];
-  try {
-    const raw = window.localStorage.getItem(ACCOUNTS_KEY);
-    const stored: StoredAccount[] = raw ? JSON.parse(raw) : [];
-    return stored.some((a) => a.email === DEMO_ACCOUNT.email) ? stored : [DEMO_ACCOUNT, ...stored];
-  } catch {
-    return [DEMO_ACCOUNT];
-  }
-}
+const storage = {
+  get<T>(key: string): T | null {
+    try {
+      const raw = window.localStorage.getItem(key);
+      return raw ? (JSON.parse(raw) as T) : null;
+    } catch {
+      return null;
+    }
+  },
+  set(key: string, value: unknown): boolean {
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value));
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  remove(key: string) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch {
+      // ignore
+    }
+  },
+};
 
-function writeAccounts(accounts: StoredAccount[]) {
-  window.localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
-}
-
-function readUser(): AuthUser | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(USER_KEY);
-    return raw ? (JSON.parse(raw) as AuthUser) : null;
-  } catch {
-    return null;
-  }
+function baseAccounts(): StoredAccount[] {
+  return [DEMO_ACCOUNT];
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(readUser);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const accountsRef = useRef<StoredAccount[]>(baseAccounts());
+
+  useEffect(() => {
+    const stored = storage.get<AuthUser>(USER_KEY);
+    if (stored) setUser(stored);
+    const accounts = storage.get<StoredAccount[]>(ACCOUNTS_KEY) ?? [];
+    accountsRef.current = accounts.some((a) => a.email === DEMO_ACCOUNT.email)
+      ? accounts
+      : [DEMO_ACCOUNT, ...accounts];
+  }, []);
 
   const login = useCallback((email: string, password: string) => {
-    const accounts = readAccounts();
-    const account = accounts.find(
+    const account = accountsRef.current.find(
       (a) => a.email.toLowerCase() === email.trim().toLowerCase(),
     );
     if (!account || account.password !== password) {
       return { ok: false as const, message: "Invalid email or password." };
     }
     const nextUser = { name: account.name, email: account.email };
-    window.localStorage.setItem(USER_KEY, JSON.stringify(nextUser));
     setUser(nextUser);
+    storage.set(USER_KEY, nextUser);
     return { ok: true as const };
   }, []);
 
   const register = useCallback((name: string, email: string, password: string) => {
     const normalizedEmail = email.trim().toLowerCase();
-    const accounts = readAccounts();
-    if (accounts.some((a) => a.email.toLowerCase() === normalizedEmail)) {
+    if (accountsRef.current.some((a) => a.email.toLowerCase() === normalizedEmail)) {
       return { ok: false as const, message: "An account with this email already exists." };
     }
     const account: StoredAccount = { name: name.trim(), email: normalizedEmail, password };
-    writeAccounts([account, ...accounts]);
+    accountsRef.current = [account, ...accountsRef.current];
+    storage.set(ACCOUNTS_KEY, accountsRef.current);
     const nextUser: AuthUser = { name: account.name, email: account.email };
-    window.localStorage.setItem(USER_KEY, JSON.stringify(nextUser));
     setUser(nextUser);
+    storage.set(USER_KEY, nextUser);
     return { ok: true as const };
   }, []);
 
   const logout = useCallback(() => {
-    window.localStorage.removeItem(USER_KEY);
     setUser(null);
+    storage.remove(USER_KEY);
   }, []);
 
   return (
